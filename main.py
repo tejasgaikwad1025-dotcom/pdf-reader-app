@@ -1,17 +1,18 @@
 """
-Book Reader - A Google Play Books style PDF reader
-Features: Library, auto-save position, dark/sepia/light modes, zoom
+Book Reader - Crash-proof version for Android
+- No RoundedRectangle (causes crashes)
+- No PIL/Pillow
+- Simple canvas only
 """
  
-import fitz  # PyMuPDF
+import fitz
 import os
 import json
  
 from kivy.app import App
-from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition
+from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
-from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.button import Button
 from kivy.uix.label import Label
@@ -19,92 +20,85 @@ from kivy.uix.slider import Slider
 from kivy.uix.image import Image as KivyImage
 from kivy.uix.filechooser import FileChooserListView
 from kivy.uix.popup import Popup
-from kivy.uix.widget import Widget
 from kivy.core.window import Window
 from kivy.graphics.texture import Texture
-from kivy.graphics import Color, Rectangle, RoundedRectangle
-from kivy.metrics import dp
+from kivy.graphics import Color, Rectangle
 from kivy.clock import Clock
-from kivy.utils import get_color_from_hex
-from kivy.storage.jsonstore import JsonStore
  
-# ── App Data Directory ────────────────────────────────────────
+# ── Storage ───────────────────────────────────────────────────
 def get_data_dir():
-    if os.path.exists("/sdcard"):
-        d = "/sdcard/BookReader"
-    else:
-        d = os.path.expanduser("~/BookReader")
-    os.makedirs(d, exist_ok=True)
-    return d
- 
-DATA_DIR = get_data_dir()
-STORE_PATH = os.path.join(DATA_DIR, "library.json")
- 
-def load_library():
-    if os.path.exists(STORE_PATH):
+    for path in ["/sdcard/BookReader", os.path.expanduser("~/BookReader")]:
         try:
-            with open(STORE_PATH, "r") as f:
-                return json.load(f)
+            os.makedirs(path, exist_ok=True)
+            return path
         except:
-            return {}
+            continue
+    return "."
+ 
+DATA_DIR  = get_data_dir()
+SAVE_FILE = os.path.join(DATA_DIR, "library.json")
+ 
+def load_lib():
+    try:
+        if os.path.exists(SAVE_FILE):
+            with open(SAVE_FILE) as f:
+                return json.load(f)
+    except:
+        pass
     return {}
  
-def save_library(data):
+def save_lib(data):
     try:
-        with open(STORE_PATH, "w") as f:
+        with open(SAVE_FILE, "w") as f:
             json.dump(data, f)
     except:
         pass
  
-# ── Global State ──────────────────────────────────────────────
-library = load_library()   # {path: {page, total, title}}
-current_pdf_path = None
-current_page = 0
-total_pages = 0
-read_mode = "light"        # light | dark | sepia
+# ── Global state ──────────────────────────────────────────────
+library   = load_lib()
+cur_path  = None
+cur_page  = 0
+tot_pages = 0
+theme     = "warm"
  
 THEMES = {
-    "light": {
-        "bg":      (0.97, 0.95, 0.90, 1),
-        "page_bg": (1.00, 0.98, 0.94, 1),
-        "bar_bg":  (0.20, 0.13, 0.08, 1),
-        "text":    (0.15, 0.10, 0.05, 1),
-        "accent":  (0.75, 0.35, 0.10, 1),
-        "btn":     (0.75, 0.35, 0.10, 1),
-        "btn_txt": (1.00, 1.00, 1.00, 1),
-        "card":    (1.00, 0.97, 0.92, 1),
-    },
-    "dark": {
-        "bg":      (0.10, 0.10, 0.12, 1),
-        "page_bg": (0.12, 0.12, 0.15, 1),
-        "bar_bg":  (0.07, 0.07, 0.09, 1),
-        "text":    (0.90, 0.88, 0.85, 1),
-        "accent":  (0.95, 0.60, 0.20, 1),
-        "btn":     (0.95, 0.60, 0.20, 1),
-        "btn_txt": (0.10, 0.10, 0.12, 1),
-        "card":    (0.18, 0.18, 0.22, 1),
-    },
-    "sepia": {
-        "bg":      (0.94, 0.87, 0.73, 1),
-        "page_bg": (0.97, 0.91, 0.78, 1),
-        "bar_bg":  (0.35, 0.22, 0.10, 1),
-        "text":    (0.28, 0.17, 0.06, 1),
-        "accent":  (0.60, 0.30, 0.05, 1),
-        "btn":     (0.60, 0.30, 0.05, 1),
-        "btn_txt": (1.00, 0.96, 0.88, 1),
-        "card":    (0.97, 0.91, 0.78, 1),
-    },
+    "warm":  {"bg":(0.98,0.95,0.90,1), "bar":(0.22,0.13,0.07,1),
+              "btn":(0.80,0.38,0.10,1), "txt":(1,1,1,1),
+              "lbl":(0.15,0.10,0.05,1), "card":(1,0.97,0.92,1)},
+    "dark":  {"bg":(0.11,0.11,0.13,1), "bar":(0.07,0.07,0.09,1),
+              "btn":(0.95,0.60,0.18,1), "txt":(1,1,1,1),
+              "lbl":(0.88,0.86,0.82,1), "card":(0.18,0.18,0.22,1)},
+    "sepia": {"bg":(0.93,0.86,0.72,1), "bar":(0.35,0.21,0.09,1),
+              "btn":(0.60,0.28,0.05,1), "txt":(1,0.95,0.85,1),
+              "lbl":(0.27,0.16,0.05,1), "card":(0.97,0.90,0.77,1)},
 }
  
-def T(key):
-    return THEMES[read_mode][key]
+def C(key):
+    return THEMES[theme][key]
  
+def bg_rect(widget, color_key):
+    with widget.canvas.before:
+        col  = Color(*C(color_key))
+        rect = Rectangle(size=widget.size, pos=widget.pos)
+    def update(w, *_):
+        col.rgba  = C(color_key)
+        rect.size = w.size
+        rect.pos  = w.pos
+    widget.bind(size=update, pos=update)
  
-# ── Helpers ───────────────────────────────────────────────────
-def render_page(path, page_num, scale=1.0):
+def make_btn(text, bg=None, **kw):
+    return Button(
+        text=text,
+        background_normal="",
+        background_color=bg or C("btn"),
+        color=C("txt"),
+        **kw
+    )
+ 
+def render_page(path, page_num, zoom=1.0):
     doc  = fitz.open(path)
     page = doc[page_num]
-    mat  = fitz.Matrix(2.0 * scale, 2.0 * scale)
+    mat  = fitz.Matrix(2.0 * zoom, 2.0 * zoom)
     pix  = page.get_pixmap(matrix=mat, alpha=False)
     tex  = Texture.create(size=(pix.width, pix.height), colorfmt="rgb")
     tex.blit_buffer(pix.samples, colorfmt="rgb", bufferfmt="ubyte")
@@ -112,386 +106,303 @@ def render_page(path, page_num, scale=1.0):
     doc.close()
     return tex, pix.width, pix.height
  
-def get_book_title(path):
+def book_title(path):
     return os.path.splitext(os.path.basename(path))[0]
  
-def styled_btn(text, bg=None, fg=None, font_size="16sp", **kwargs):
-    btn = Button(
-        text=text,
-        font_size=font_size,
-        background_normal="",
-        background_color=bg or T("btn"),
-        color=fg or T("btn_txt"),
-        **kwargs
-    )
-    return btn
  
- 
-# ── Library Screen ────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# Library Screen
+# ══════════════════════════════════════════════════════════════
 class LibraryScreen(Screen):
-    def __init__(self, **kw):
-        super().__init__(**kw)
+ 
+    def on_enter(self):
         self._build()
  
     def _build(self):
         self.clear_widgets()
         root = BoxLayout(orientation="vertical")
+        bg_rect(root, "bg")
  
-        # Background
-        with root.canvas.before:
-            Color(*T("bg"))
-            self._bg = Rectangle(size=root.size, pos=root.pos)
-        root.bind(size=lambda w,v: setattr(self._bg,"size",v),
-                  pos =lambda w,v: setattr(self._bg,"pos", v))
+        # Header
+        hdr = BoxLayout(size_hint=(1, None), height=65, padding=8, spacing=8)
+        bg_rect(hdr, "bar")
+        title = Label(text="Book Reader", font_size="22sp", bold=True,
+                      color=C("txt"), size_hint=(1,1),
+                      halign="left", valign="middle")
+        title.bind(size=title.setter("text_size"))
+        hdr.add_widget(title)
+        th_labels = {"warm":"Dark", "dark":"Sepia", "sepia":"Light"}
+        th_btn = make_btn(th_labels[theme], font_size="14sp",
+                          size_hint=(None,1), width=80)
+        th_btn.bind(on_press=self._cycle_theme)
+        hdr.add_widget(th_btn)
+        root.add_widget(hdr)
  
-        # ── Header ──
-        header = BoxLayout(size_hint=(1, None), height=dp(70), padding=dp(12), spacing=dp(8))
-        with header.canvas.before:
-            Color(*T("bar_bg"))
-            self._hbg = Rectangle(size=header.size, pos=header.pos)
-        header.bind(size=lambda w,v: setattr(self._hbg,"size",v),
-                    pos =lambda w,v: setattr(self._hbg,"pos", v))
- 
-        # Book icon + title
-        icon_lbl = Label(text="📚", font_size="28sp", size_hint=(None,1), width=dp(44))
-        title_lbl = Label(text="Book Reader", font_size="22sp", bold=True,
-                          color=T("btn_txt"), halign="left", valign="middle",
-                          size_hint=(1,1))
-        title_lbl.bind(size=title_lbl.setter("text_size"))
-        header.add_widget(icon_lbl)
-        header.add_widget(title_lbl)
- 
-        # Theme toggle
-        self.theme_btn = styled_btn("🌙", bg=T("accent"), font_size="20sp",
-                                    size_hint=(None,1), width=dp(50))
-        self.theme_btn.bind(on_press=self.cycle_theme)
-        header.add_widget(self.theme_btn)
- 
-        root.add_widget(header)
- 
-        # ── Book Grid ──
+        # Book list
         scroll = ScrollView(size_hint=(1,1))
-        self.grid = GridLayout(cols=2, spacing=dp(12), padding=dp(12),
+        self.grid = GridLayout(cols=1, spacing=4, padding=8,
                                size_hint_y=None)
         self.grid.bind(minimum_height=self.grid.setter("height"))
         scroll.add_widget(self.grid)
         root.add_widget(scroll)
  
-        # ── Bottom Bar ──
-        bot = BoxLayout(size_hint=(1, None), height=dp(60), padding=dp(10), spacing=dp(10))
-        with bot.canvas.before:
-            Color(*T("bar_bg"))
-            self._bbg = Rectangle(size=bot.size, pos=bot.pos)
-        bot.bind(size=lambda w,v: setattr(self._bbg,"size",v),
-                 pos =lambda w,v: setattr(self._bbg,"pos", v))
- 
-        add_btn = styled_btn("+ Add Book", bg=T("accent"), font_size="17sp")
-        add_btn.bind(on_press=self.open_file_chooser)
+        # Bottom bar
+        bot = BoxLayout(size_hint=(1, None), height=60, padding=8)
+        bg_rect(bot, "bar")
+        add_btn = make_btn("+ Add Book", font_size="17sp")
+        add_btn.bind(on_press=self._pick_file)
         bot.add_widget(add_btn)
         root.add_widget(bot)
  
         self.add_widget(root)
-        self._populate_grid()
+        self._fill_grid()
  
-    def _populate_grid(self):
+    def _fill_grid(self):
         self.grid.clear_widgets()
         if not library:
-            lbl = Label(text="No books yet.\nTap '+ Add Book' to get started!",
-                        font_size="16sp", color=T("text"),
-                        halign="center", size_hint=(1, None), height=dp(120))
+            lbl = Label(
+                text="No books yet. Tap + Add Book to open a PDF.",
+                font_size="15sp", color=C("lbl"),
+                size_hint=(1, None), height=80,
+                halign="center")
             lbl.bind(size=lbl.setter("text_size"))
             self.grid.add_widget(lbl)
             return
+        for path, info in list(library.items()):
+            self.grid.add_widget(self._make_row(path, info))
  
-        for path, info in library.items():
-            self.grid.add_widget(self._make_card(path, info))
+    def _make_row(self, path, info):
+        row = BoxLayout(size_hint=(1, None), height=75,
+                        padding=8, spacing=6)
+        bg_rect(row, "card")
  
-    def _make_card(self, path, info):
-        card = BoxLayout(orientation="vertical", size_hint=(1, None),
-                         height=dp(160), padding=dp(8), spacing=dp(4))
-        with card.canvas.before:
-            Color(*T("card"))
-            RoundedRectangle(size=card.size, pos=card.pos, radius=[dp(10)])
+        icon = Label(text="📖", font_size="28sp",
+                     size_hint=(None,1), width=44)
+        row.add_widget(icon)
  
-        # Book cover placeholder
-        cover = BoxLayout(size_hint=(1, None), height=dp(90))
-        with cover.canvas.before:
-            Color(*T("accent"))
-            RoundedRectangle(size=cover.size, pos=cover.pos, radius=[dp(8)])
-        cover_lbl = Label(text="📖", font_size="36sp")
-        cover.add_widget(cover_lbl)
-        card.add_widget(cover)
- 
-        title = info.get("title", get_book_title(path))
+        title = info.get("title", book_title(path))
         pg    = info.get("page", 0)
         total = info.get("total", 1)
-        pct   = int((pg / max(total-1, 1)) * 100)
+        pct   = int(pg / max(total-1,1) * 100)
  
-        name_lbl = Label(text=title, font_size="12sp", color=T("text"),
-                         halign="center", size_hint=(1, None), height=dp(30),
-                         text_size=(dp(130), None), shorten=True)
-        card.add_widget(name_lbl)
+        info_col = BoxLayout(orientation="vertical", size_hint=(1,1))
+        t = Label(text=title, font_size="15sp", bold=True,
+                  color=C("lbl"), halign="left", valign="bottom",
+                  size_hint=(1,None), height=34, shorten=True)
+        t.bind(size=t.setter("text_size"))
+        p = Label(text=f"Page {pg+1}/{total}  {pct}% read",
+                  font_size="12sp", color=C("btn"),
+                  halign="left", size_hint=(1,None), height=24)
+        p.bind(size=p.setter("text_size"))
+        info_col.add_widget(t)
+        info_col.add_widget(p)
+        row.add_widget(info_col)
  
-        prog_lbl = Label(text=f"Page {pg+1}/{total}  •  {pct}%",
-                         font_size="10sp", color=T("accent"),
-                         size_hint=(1, None), height=dp(18))
-        card.add_widget(prog_lbl)
+        read_btn = make_btn("Read", font_size="14sp",
+                            size_hint=(None,1), width=65)
+        read_btn.bind(on_press=lambda *_: self._open(path))
+        row.add_widget(read_btn)
  
-        card.bind(on_touch_down=lambda w, t: self._open_book(path) if w.collide_point(*t.pos) else None)
+        del_btn = make_btn("X", bg=(0.75,0.18,0.18,1),
+                           font_size="14sp", size_hint=(None,1), width=38)
+        del_btn.bind(on_press=lambda *_: self._delete(path))
+        row.add_widget(del_btn)
  
-        # Delete button
-        del_btn = styled_btn("✕", bg=(0.8,0.2,0.2,1), font_size="12sp",
-                             size_hint=(None, None), size=(dp(30), dp(24)),
-                             pos_hint={"right":1})
-        del_btn.bind(on_press=lambda *_: self._remove_book(path))
-        card.add_widget(del_btn)
+        return row
  
-        return card
- 
-    def _open_book(self, path):
-        global current_pdf_path, current_page, total_pages
+    def _open(self, path):
+        global cur_path, cur_page, tot_pages
         if not os.path.exists(path):
-            self._show_error(f"File not found:\n{path}")
+            Popup(title="Error",
+                  content=Label(text="File not found:\n"+path),
+                  size_hint=(.8,.35)).open()
             return
-        current_pdf_path = path
-        info = library.get(path, {})
-        current_page = info.get("page", 0)
-        doc = fitz.open(path)
-        total_pages = len(doc)
-        doc.close()
-        rs = self.manager.get_screen("reader")
-        rs.refresh()
-        self.manager.transition = SlideTransition(direction="left")
+        cur_path = path
+        cur_page = library.get(path, {}).get("page", 0)
+        try:
+            doc = fitz.open(path)
+            tot_pages = len(doc)
+            doc.close()
+        except Exception as e:
+            Popup(title="Error",
+                  content=Label(text=f"Cannot open:\n{e}"),
+                  size_hint=(.8,.35)).open()
+            return
         self.manager.current = "reader"
  
-    def _remove_book(self, path):
-        if path in library:
-            del library[path]
-            save_library(library)
-            self._build()
+    def _delete(self, path):
+        library.pop(path, None)
+        save_lib(library)
+        self._build()
  
-    def _show_error(self, msg):
-        popup = Popup(title="Error",
-                      content=Label(text=msg),
-                      size_hint=(.8,.4))
-        popup.open()
- 
-    def open_file_chooser(self, *_):
-        content = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8))
-        start = "/sdcard" if os.path.exists("/sdcard") else os.path.expanduser("~")
-        fc = FileChooserListView(filters=["*.pdf"], path=start, size_hint=(1,1))
+    def _pick_file(self, *_):
+        content = BoxLayout(orientation="vertical", spacing=6, padding=6)
+        start = "/sdcard" if os.path.exists("/sdcard") else \
+                os.path.expanduser("~")
+        fc = FileChooserListView(filters=["*.pdf"], path=start)
         content.add_widget(fc)
- 
-        btn_row = BoxLayout(size_hint=(1, None), height=dp(48), spacing=dp(8))
-        sel_btn = styled_btn("Open", bg=T("accent"))
-        can_btn = styled_btn("Cancel", bg=(.4,.4,.4,1))
-        btn_row.add_widget(sel_btn)
-        btn_row.add_widget(can_btn)
-        content.add_widget(btn_row)
- 
-        popup = Popup(title="Choose a PDF", content=content, size_hint=(.95,.92))
+        btns = BoxLayout(size_hint=(1,None), height=48, spacing=6)
+        ok  = make_btn("Open")
+        can = make_btn("Cancel", bg=(0.4,0.4,0.4,1))
+        btns.add_widget(ok)
+        btns.add_widget(can)
+        content.add_widget(btns)
+        popup = Popup(title="Select PDF", content=content,
+                      size_hint=(.95,.92))
  
         def do_open(*_):
-            if fc.selection:
-                path = fc.selection[0]
-                doc = fitz.open(path)
+            if not fc.selection:
+                return
+            path = fc.selection[0]
+            try:
+                doc   = fitz.open(path)
                 total = len(doc)
                 doc.close()
-                library[path] = {
-                    "title": get_book_title(path),
-                    "page": 0,
-                    "total": total
-                }
-                save_library(library)
+            except Exception as e:
                 popup.dismiss()
-                self._build()
-                self._open_book(path)
+                Popup(title="Error",
+                      content=Label(text=str(e)),
+                      size_hint=(.8,.3)).open()
+                return
+            library[path] = {"title":book_title(path),
+                             "page":0, "total":total}
+            save_lib(library)
+            popup.dismiss()
+            self._build()
+            self._open(path)
  
-        sel_btn.bind(on_press=do_open)
-        can_btn.bind(on_press=popup.dismiss)
+        ok.bind(on_press=do_open)
+        can.bind(on_press=popup.dismiss)
         popup.open()
  
-    def cycle_theme(self, *_):
-        global read_mode
-        modes = ["light", "sepia", "dark"]
-        idx = modes.index(read_mode)
-        read_mode = modes[(idx+1) % 3]
-        icons = {"light":"☀️", "sepia":"📜", "dark":"🌙"}
+    def _cycle_theme(self, *_):
+        global theme
+        theme = {"warm":"dark","dark":"sepia","sepia":"warm"}[theme]
         self._build()
+ 
+ 
+# ══════════════════════════════════════════════════════════════
+# Reader Screen
+# ══════════════════════════════════════════════════════════════
+class ReaderScreen(Screen):
+    _zoom = 1.0
  
     def on_enter(self):
         self._build()
- 
- 
-# ── Reader Screen ─────────────────────────────────────────────
-class ReaderScreen(Screen):
-    def __init__(self, **kw):
-        super().__init__(**kw)
-        self._zoom = 1.0
-        self._ui_visible = True
-        self._build()
+        Clock.schedule_once(lambda dt: self._load(), 0.15)
  
     def _build(self):
         self.clear_widgets()
-        root = FloatLayout()
+        root = BoxLayout(orientation="vertical")
+        bg_rect(root, "bg")
  
-        # Page background
-        with root.canvas.before:
-            Color(*T("page_bg"))
-            self._bg = Rectangle(size=root.size, pos=root.pos)
-        root.bind(size=lambda w,v: setattr(self._bg,"size",v),
-                  pos =lambda w,v: setattr(self._bg,"pos", v))
+        # Top bar
+        self.top = BoxLayout(size_hint=(1,None), height=56,
+                             padding=6, spacing=6)
+        bg_rect(self.top, "bar")
+        back = make_btn("<", font_size="22sp",
+                        size_hint=(None,1), width=50)
+        back.bind(on_press=self._go_back)
+        self.top.add_widget(back)
+        self.title_lbl = Label(text="", font_size="14sp",
+                               color=C("txt"), size_hint=(1,1),
+                               halign="center", shorten=True)
+        self.title_lbl.bind(size=self.title_lbl.setter("text_size"))
+        self.top.add_widget(self.title_lbl)
+        self.pg_lbl = Label(text="", font_size="13sp",
+                            color=C("btn"), size_hint=(None,1), width=80)
+        self.top.add_widget(self.pg_lbl)
+        root.add_widget(self.top)
  
-        # Scroll area for page image
-        self.scroll = ScrollView(size_hint=(1,1), pos_hint={"x":0,"y":0})
-        self.page_img = KivyImage(allow_stretch=True, keep_ratio=True,
-                                  size_hint=(None, None))
-        self.scroll.add_widget(self.page_img)
+        # Page view
+        self.scroll = ScrollView(size_hint=(1,1))
+        self.img = KivyImage(allow_stretch=True, keep_ratio=True,
+                             size_hint=(None,None))
+        self.scroll.add_widget(self.img)
         root.add_widget(self.scroll)
  
-        # ── Top Bar ──
-        self.top_bar = BoxLayout(
-            size_hint=(1, None), height=dp(56),
-            pos_hint={"x":0,"top":1}, padding=dp(6), spacing=dp(6))
-        with self.top_bar.canvas.before:
-            Color(*T("bar_bg"))
-            self._tbg = Rectangle(size=self.top_bar.size, pos=self.top_bar.pos)
-        self.top_bar.bind(
-            size=lambda w,v: setattr(self._tbg,"size",v),
-            pos =lambda w,v: setattr(self._tbg,"pos", v))
+        # Bottom bar
+        bot = BoxLayout(size_hint=(1,None), height=64,
+                        padding=6, spacing=6)
+        bg_rect(bot, "bar")
+        prev = make_btn("< Prev", font_size="15sp",
+                        size_hint=(None,1), width=90)
+        prev.bind(on_press=self._prev)
+        bot.add_widget(prev)
  
-        back_btn = styled_btn("←", bg=T("accent"), font_size="22sp",
-                              size_hint=(None,1), width=dp(48))
-        back_btn.bind(on_press=self._go_home)
-        self.top_bar.add_widget(back_btn)
+        zm = BoxLayout(orientation="vertical", size_hint=(1,1))
+        zm.add_widget(Label(text="Zoom", font_size="11sp",
+                            color=C("txt"), size_hint=(1,None), height=18))
+        self.slider = Slider(min=0.5, max=3.0, value=self._zoom)
+        self.slider.bind(value=self._zoom_ch)
+        zm.add_widget(self.slider)
+        bot.add_widget(zm)
  
-        self.title_lbl = Label(text="", font_size="14sp",
-                               color=T("btn_txt"), size_hint=(1,1),
-                               halign="center", shorten=True)
-        self.top_bar.add_widget(self.title_lbl)
- 
-        self.page_lbl = Label(text="0/0", font_size="13sp",
-                              color=T("accent"), size_hint=(None,1),
-                              width=dp(70))
-        self.top_bar.add_widget(self.page_lbl)
- 
-        root.add_widget(self.top_bar)
- 
-        # ── Bottom Bar ──
-        self.bot_bar = BoxLayout(
-            size_hint=(1, None), height=dp(72),
-            pos_hint={"x":0,"y":0}, padding=dp(6), spacing=dp(6))
-        with self.bot_bar.canvas.before:
-            Color(*T("bar_bg"))
-            self._bbg = Rectangle(size=self.bot_bar.size, pos=self.bot_bar.pos)
-        self.bot_bar.bind(
-            size=lambda w,v: setattr(self._bbg,"size",v),
-            pos =lambda w,v: setattr(self._bbg,"pos", v))
- 
-        prev_btn = styled_btn("◀", bg=T("accent"), font_size="20sp",
-                              size_hint=(None,1), width=dp(52))
-        prev_btn.bind(on_press=self.prev_page)
-        self.bot_bar.add_widget(prev_btn)
- 
-        zoom_box = BoxLayout(orientation="vertical", size_hint=(1,1))
-        zoom_lbl = Label(text="Zoom", font_size="11sp", color=T("btn_txt"),
-                         size_hint=(1, None), height=dp(18))
-        self.zoom_slider = Slider(min=0.5, max=3.0, value=self._zoom,
-                                  size_hint=(1,1))
-        self.zoom_slider.bind(value=self._on_zoom)
-        zoom_box.add_widget(zoom_lbl)
-        zoom_box.add_widget(self.zoom_slider)
-        self.bot_bar.add_widget(zoom_box)
- 
-        next_btn = styled_btn("▶", bg=T("accent"), font_size="20sp",
-                              size_hint=(None,1), width=dp(52))
-        next_btn.bind(on_press=self.next_page)
-        self.bot_bar.add_widget(next_btn)
- 
-        root.add_widget(self.bot_bar)
- 
-        # Tap center to toggle UI
-        tap_zone = Widget(size_hint=(1,1))
-        tap_zone.bind(on_touch_down=self._on_tap)
-        root.add_widget(tap_zone)
+        nxt = make_btn("Next >", font_size="15sp",
+                       size_hint=(None,1), width=90)
+        nxt.bind(on_press=self._next)
+        bot.add_widget(nxt)
+        root.add_widget(bot)
  
         self.add_widget(root)
  
-    def refresh(self):
-        self._build()
-        self.load_page()
- 
-    def load_page(self):
-        if current_pdf_path is None:
+    def _load(self):
+        if cur_path is None:
             return
         try:
-            tex, w, h = render_page(current_pdf_path, current_page, self._zoom)
-            self.page_img.texture = tex
-            self.page_img.size = (w, h)
-            title = get_book_title(current_pdf_path)
-            self.title_lbl.text = title
-            self.page_lbl.text  = f"{current_page+1}/{total_pages}"
-            self._save_progress()
+            tex, w, h = render_page(cur_path, cur_page, self._zoom)
+            self.img.texture = tex
+            self.img.size    = (w, h)
+            self.title_lbl.text = book_title(cur_path)
+            self.pg_lbl.text    = f"{cur_page+1}/{tot_pages}"
+            self._save()
         except Exception as e:
-            self.page_lbl.text = "Error"
+            self.pg_lbl.text = "Error"
  
-    def _save_progress(self):
-        if current_pdf_path:
-            library[current_pdf_path] = {
-                "title": get_book_title(current_pdf_path),
-                "page":  current_page,
-                "total": total_pages,
-            }
-            save_library(library)
+    def _save(self):
+        if cur_path:
+            library[cur_path] = {"title":book_title(cur_path),
+                                 "page":cur_page, "total":tot_pages}
+            save_lib(library)
  
-    def next_page(self, *_):
-        global current_page
-        if current_page < total_pages - 1:
-            current_page += 1
-            self.load_page()
+    def _prev(self, *_):
+        global cur_page
+        if cur_page > 0:
+            cur_page -= 1
+            self._load()
  
-    def prev_page(self, *_):
-        global current_page
-        if current_page > 0:
-            current_page -= 1
-            self.load_page()
+    def _next(self, *_):
+        global cur_page
+        if cur_page < tot_pages - 1:
+            cur_page += 1
+            self._load()
  
-    def _on_zoom(self, slider, val):
+    def _zoom_ch(self, s, val):
         self._zoom = val
-        Clock.unschedule(self._delayed_render)
-        Clock.schedule_once(self._delayed_render, 0.3)
+        Clock.unschedule(self._dl)
+        Clock.schedule_once(self._dl, 0.4)
  
-    def _delayed_render(self, *_):
-        self.load_page()
+    def _dl(self, *_):
+        self._load()
  
-    def _on_tap(self, widget, touch):
-        # Only toggle if tap is in center 40% of screen
-        cx = Window.width  * 0.3
-        cy = Window.height * 0.3
-        if cx < touch.x < Window.width - cx:
-            self._ui_visible = not self._ui_visible
-            self.top_bar.opacity = 1 if self._ui_visible else 0
-            self.bot_bar.opacity = 1 if self._ui_visible else 0
- 
-    def _go_home(self, *_):
-        self._save_progress()
-        self.manager.transition = SlideTransition(direction="right")
+    def _go_back(self, *_):
+        self._save()
         self.manager.current = "library"
  
-    def on_enter(self):
-        self.refresh()
  
- 
-# ── App ───────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# App Entry
+# ══════════════════════════════════════════════════════════════
 class BookReaderApp(App):
     def build(self):
-        Window.clearcolor = T("bg")
+        self.title = "Book Reader"
+        Window.clearcolor = C("bg")
         sm = ScreenManager()
         sm.add_widget(LibraryScreen(name="library"))
         sm.add_widget(ReaderScreen(name="reader"))
         return sm
  
- 
 if __name__ == "__main__":
     BookReaderApp().run()
+ 
  

@@ -6,7 +6,7 @@
 [app]
 
 # (str) Title of your application
-title = PDF Reader
+title = Book Reader
 
 # (str) Package name
 package.name = pdfreader
